@@ -8,7 +8,7 @@
 ;; Modified: April 08, 2026
 ;; Version: 0.0.1
 ;; Homepage: https://github.com/cassandracomar/agent-shell-ediff
-;; Package-Requires: ((emacs "24.3"))
+;; Package-Requires: ((emacs "24.3") (agent-shell "0.58.1"))
 ;;
 ;; This file is not part of GNU Emacs.
 ;;
@@ -68,22 +68,69 @@ overlays in non-selected windows."
                       vec)))
           (error nil))))))
 
-(cl-defun agent-shell-ediff (&key old new on-exit on-accept on-reject title file)
+(cl-defun agent-shell-ediff (&key diffs on-exit on-accept on-reject title)
   "Ediff-based replacement for `agent-shell-diff'.
-Creates a side-by-side ediff session from OLD and NEW strings.
-On quit, prompts to accept or reject changes and fires the
-appropriate callback.
+Creates one or more side-by-side ediff sessions, one per entry in
+DIFFS.  When DIFFS holds more than one diff, sessions are shown one
+after another; only once the last one is quit is the user prompted to
+accept or reject, and the appropriate callback fires for the batch as
+a whole.
 
 Arguments match `agent-shell-diff':
-  :OLD       - Original string content
-  :NEW       - Modified string content
-  :ON-EXIT   - Function called when buffer is killed unexpectedly
+  :DIFFS     - List of ((:old . _) (:new . _) (:file . _)) alists, as
+               returned by `agent-shell--make-diff-infos'.  A single
+               diff is passed as a one-element list.
+  :ON-EXIT   - Function called with no arguments if a session is
+               killed unexpectedly
   :ON-ACCEPT - Command to accept all changes
   :ON-REJECT - Command to reject all changes
-  :TITLE     - Optional title for buffer names
-  :FILE      - File path (used for mode detection)"
-  (let* ((name (or title (and file (file-name-nondirectory file)) "unknown"))
-         ;; Try to build full-file buffers: read file from disk for
+  :TITLE     - Optional title to fall back on for buffer names when a
+               diff has no :file"
+  (agent-shell-ediff--review
+   :diffs diffs
+   :index 1
+   :total (length diffs)
+   :title title
+   :on-exit on-exit
+   :on-accept on-accept
+   :on-reject on-reject
+   :saved-winconf (current-window-configuration)
+   :calling-buffer (current-buffer)))
+
+(cl-defun agent-shell-ediff--review (&key diffs index total title on-exit on-accept on-reject saved-winconf calling-buffer)
+  "Review the first diff in DIFFS, then continue with the rest.
+INDEX and TOTAL number the diff currently under review among all the
+diffs being reviewed together; used to label buffers when DIFFS holds
+more than one entry.  The remaining arguments are as in
+`agent-shell-ediff' and are threaded through unchanged as review
+proceeds from one diff to the next."
+  (when diffs
+    (let* ((diff (car diffs))
+           (rest (cdr diffs))
+           (file (map-elt diff :file))
+           (old (or (map-elt diff :old) ""))
+           (new (or (map-elt diff :new) ""))
+           (name (or (and file (file-name-nondirectory file)) title "unknown"))
+           (label (if (> total 1) (format "%s (%d/%d)" name index total) name)))
+      (agent-shell-ediff--session
+       :old old :new new :file file :label label :final (null rest)
+       :on-exit on-exit :on-accept on-accept :on-reject on-reject
+       :saved-winconf saved-winconf :calling-buffer calling-buffer
+       :on-continue (lambda ()
+                      (agent-shell-ediff--review
+                       :diffs rest :index (1+ index) :total total
+                       :title title :on-exit on-exit :on-accept on-accept
+                       :on-reject on-reject :saved-winconf saved-winconf
+                       :calling-buffer calling-buffer))))))
+
+(cl-defun agent-shell-ediff--session (&key old new file label final on-exit on-accept on-reject saved-winconf calling-buffer on-continue)
+  "Run a single ediff session comparing OLD and NEW content for FILE.
+LABEL names the session's buffers.  When FINAL is non-nil, quitting
+prompts to accept or reject and fires ON-ACCEPT/ON-REJECT; otherwise
+quitting simply calls ON-CONTINUE to advance to the next diff in a
+multi-file batch.  SAVED-WINCONF is restored once the session ends.
+ON-EXIT and CALLING-BUFFER are as in `agent-shell-ediff'."
+  (let* (;; Try to build full-file buffers: read file from disk for
          ;; the old content, replace the old hunk with the new hunk
          ;; to produce the new content.  Fall back to the raw
          ;; old/new hunks if the file can't be read or the hunk
@@ -101,11 +148,9 @@ Arguments match `agent-shell-diff':
                          (buffer-string)))))
          (old-content (or full-old old))
          (new-content (or full-new new))
-         (buf-a (generate-new-buffer (format "*old: %s*" name)))
-         (buf-b (generate-new-buffer (format "*new: %s*" name)))
+         (buf-a (generate-new-buffer (format "*old: %s*" label)))
+         (buf-b (generate-new-buffer (format "*new: %s*" label)))
          (mode (and file (assoc-default file auto-mode-alist #'string-match)))
-         (saved-winconf (current-window-configuration))
-         (calling-buffer (current-buffer))
          ctl-buf startup-hook-fn before-setup-hook-fn)
 
     ;; Fill buffers with content and set mode for syntax highlighting
@@ -141,33 +186,40 @@ Arguments match `agent-shell-diff':
               ;; Suppress janitor asking about our temp buffers
               (setq-local ediff-keep-variants t)
 
-              ;; Quit hook chain: prompt → kill temps → ediff cleanup → restore winconf
+              ;; Quit hook chain: prompt/continue → kill temps → ediff cleanup → restore winconf
               (setq-local ediff-quit-hook
                           (list
-                           ;; 1. Prompt accept/reject, schedule callback
-                           (lambda ()
-                             (let ((choice (condition-case nil
-                                               (if (y-or-n-p "Accept changes?")
-                                                   'accept 'reject)
-                                             (quit 'ignore))))
+                           ;; 1. On the last diff, prompt accept/reject and schedule
+                           ;;    the callback; otherwise clear on-exit and move on to
+                           ;;    the next diff in the batch.
+                           (if final
+                               (lambda ()
+                                 (let ((choice (condition-case nil
+                                                   (if (y-or-n-p "Accept changes?")
+                                                       'accept 'reject)
+                                                 (quit 'ignore))))
+                                   ;; Clear on-exit so kill-buffer-hook doesn't double-fire
+                                   (setq agent-shell-diff--on-exit nil)
+                                   (run-with-idle-timer
+                                    0.1 nil
+                                    (lambda ()
+                                      (pcase choice
+                                        ('accept (when on-accept (funcall on-accept)))
+                                        ('reject
+                                         ;; Route through on-exit which sends a proper
+                                         ;; reject_once permission response (not just
+                                         ;; :cancelled).  Suppress its y-or-n-p since
+                                         ;; we already have the user's answer.
+                                         (if on-exit
+                                             (cl-letf (((symbol-function 'y-or-n-p)
+                                                        (lambda (&rest _) nil)))
+                                               (funcall on-exit))
+                                           (when on-reject (funcall on-reject))))
+                                        (_ (message "Ignored")))))))
+                             (lambda ()
                                ;; Clear on-exit so kill-buffer-hook doesn't double-fire
                                (setq agent-shell-diff--on-exit nil)
-                               (run-with-idle-timer
-                                0.1 nil
-                                (lambda ()
-                                  (pcase choice
-                                    ('accept (when on-accept (funcall on-accept)))
-                                    ('reject
-                                     ;; Route through on-exit which sends a proper
-                                     ;; reject_once permission response (not just
-                                     ;; :cancelled).  Suppress its y-or-n-p since
-                                     ;; we already have the user's answer.
-                                     (if on-exit
-                                         (cl-letf (((symbol-function 'y-or-n-p)
-                                                    (lambda (&rest _) nil)))
-                                           (funcall on-exit))
-                                       (when on-reject (funcall on-reject))))
-                                    (_ (message "Ignored")))))))
+                               (run-with-idle-timer 0.1 nil on-continue)))
                            ;; 2. Kill temp buffers
                            (lambda ()
                              (when (buffer-live-p buf-a) (kill-buffer buf-a))
@@ -210,7 +262,7 @@ Arguments match `agent-shell-diff':
     (condition-case err
         (let ((old-setup-fn ediff-window-setup-function)
               (old-split-fn ediff-split-window-function)
-              (ediff-control-buffer-suffix (format "<%s>" name)))
+              (ediff-control-buffer-suffix (format "<%s>" label)))
           (unwind-protect
               (progn
                 (setq ediff-window-setup-function #'ediff-setup-windows-plain
