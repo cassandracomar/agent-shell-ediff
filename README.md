@@ -1,13 +1,14 @@
 # agent-shell-ediff
 
-Replace `agent-shell-diff` with an ediff-based interface. File changes
-proposed by agent-shell are displayed in a side-by-side ediff session
-with full syntax highlighting and proper diff-region faces. On quit you
-are prompted to accept or reject the change.
+Replace `agent-shell-diff` with a grouped Ediff interface. All files in
+one Agent Shell edit share a persistent sidebar, one review lifecycle,
+and one permission decision. Select a file in the sidebar to change the
+side-by-side comparison. On quit you are prompted to accept or reject
+the entire edit.
 
 ## Requirements
 
-- Emacs 24.3+
+- Emacs 29.1+
 - [agent-shell](https://github.com/xenodium/agent-shell)
 
 ## Installation
@@ -98,9 +99,20 @@ opacities to ensure good visibility:
 - `agent-shell-ediff-quick-quit` -- when non-nil, `q` in the ediff
   control buffer calls `agent-shell-ediff-quit` (skips the extra ediff
   quit confirmation). Works with evil-mode. Default: `nil`.
+- `agent-shell-ediff-sidebar-width` -- width of the persistent file
+  sidebar. Default: `32`.
 
 ## Key bindings
 
+In the file sidebar:
+
+- `j` / `k` or arrow keys move between files.
+- `RET` or `SPC` displays the selected file.
+- `a` accepts the entire edit.
+- `r` rejects the entire edit.
+- `q` closes the grouped review and asks whether to accept or reject it.
+
 Inside an ediff session the standard ediff bindings apply. With
 `agent-shell-ediff-quick-quit` enabled, `q` skips the ediff quit
-confirmation and goes straight to the accept/reject prompt.
+confirmation and ends the grouped review, then Agent Shell asks whether
+to accept or reject the entire edit.
