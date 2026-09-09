@@ -82,7 +82,10 @@ highlighting remains visible in non-selected windows."
 (defvar-local agent-shell-ediff--buffer-group nil
   "The grouped review associated with the current buffer.")
 
+(declare-function evil-define-key* "evil-core")
 (declare-function evil-local-set-key "evil-core")
+(declare-function evil-set-initial-state "evil-core")
+(defvar winum-assign-functions)
 
 ;;;; Sidebar
 
@@ -108,6 +111,19 @@ highlighting remains visible in non-selected windows."
   (hl-line-mode 1)
   (add-hook 'kill-buffer-hook
             #'agent-shell-ediff--sidebar-killed-hook nil t))
+
+(with-eval-after-load 'evil
+  (evil-set-initial-state 'agent-shell-ediff-list-mode 'normal)
+  (evil-define-key* 'normal agent-shell-ediff-list-mode-map
+    (kbd "RET") #'agent-shell-ediff-select-file
+    (kbd "SPC") #'agent-shell-ediff-select-file
+    (kbd "j") #'agent-shell-ediff-next-file
+    (kbd "k") #'agent-shell-ediff-previous-file
+    (kbd "<down>") #'agent-shell-ediff-next-file
+    (kbd "<up>") #'agent-shell-ediff-previous-file
+    (kbd "a") #'agent-shell-ediff-accept-all
+    (kbd "r") #'agent-shell-ediff-reject-all
+    (kbd "q") #'agent-shell-ediff-end-session))
 
 (defun agent-shell-ediff--diff-file (diff)
   "Return DIFF's file name."
@@ -160,6 +176,14 @@ highlighting remains visible in non-selected windows."
 (defun agent-shell-ediff--sidebar-window-p (window)
   "Return non-nil when WINDOW is this package's file-list window."
   (window-parameter window 'agent-shell-ediff-sidebar))
+
+(defun agent-shell-ediff--winum-assign ()
+  "Assign window number 0 to the Agent Shell Ediff sidebar."
+  (when (eq major-mode 'agent-shell-ediff-list-mode) 0))
+
+(with-eval-after-load 'winum
+  (add-to-list 'winum-assign-functions
+               #'agent-shell-ediff--winum-assign))
 
 ;;;; Diff contents and buffers
 

@@ -99,6 +99,26 @@
         (should (equal started '(1 0)))
         (agent-shell-diff-kill-buffer owner)))))
 
+(ert-deftest agent-shell-ediff-test-sidebar-is-winum-zero ()
+  (with-temp-buffer
+    (agent-shell-ediff-list-mode)
+    (should (= (agent-shell-ediff--winum-assign) 0)))
+  (with-temp-buffer
+    (should-not (agent-shell-ediff--winum-assign))))
+
+(ert-deftest agent-shell-ediff-test-evil-sidebar-bindings ()
+  (skip-unless (featurep 'evil))
+  (let ((map (evil-get-auxiliary-keymap
+              agent-shell-ediff-list-mode-map 'normal)))
+    (should (eq (lookup-key map (kbd "RET"))
+                #'agent-shell-ediff-select-file))
+    (should (eq (lookup-key map (kbd "SPC"))
+                #'agent-shell-ediff-select-file))
+    (should (eq (lookup-key map (kbd "j"))
+                #'agent-shell-ediff-next-file))
+    (should (eq (lookup-key map (kbd "k"))
+                #'agent-shell-ediff-previous-file))))
+
 (ert-deftest agent-shell-ediff-test-accept-applies-to-whole-group ()
   (agent-shell-ediff-test--without-live-group
     (let ((accept-count 0)
